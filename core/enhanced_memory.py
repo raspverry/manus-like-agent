@@ -7,7 +7,7 @@
 コードアクトパラダイムのためのメモリ管理機能も強化しています。
 """
 import os
-import logging
+from core.logging_config import logger
 import json
 import time
 import re
@@ -18,7 +18,7 @@ import pickle
 
 from core.memory import Memory
 
-logger = logging.getLogger(__name__)
+
 
 class EnhancedMemory(Memory):
     """
