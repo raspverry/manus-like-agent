@@ -3,7 +3,7 @@
 強化されたツールレジストリ：ツールを登録・取得・実行するクラス。
 CodeActパラダイムのサポートとトレーサビリティを強化。
 """
-import logging
+from core.logging_config import logger
 import json
 import importlib
 import functools
@@ -11,7 +11,7 @@ import time
 import traceback
 from typing import Dict, Any, Callable, Optional, List
 
-logger = logging.getLogger(__name__)
+
 
 def tool(name: str, description: str, parameters: Dict[str, Any]):
     """
