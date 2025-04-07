@@ -839,3 +839,83 @@ async def _run_javascript_async(code: str):
         error_message = f"JavaScript実行エラー: {str(e)}"
         logger.error(error_message)
         return error_message
+
+@tool(
+    name="browser_extract_pdf",
+    description="PDF文書からテキストを抽出する",
+    parameters={
+        "type": "object",
+        "properties": {
+            "url": {"type": "string", "description": "PDFファイルのURL"}
+        },
+        "required": ["url"]
+    }
+)
+def browser_extract_pdf(url: str):
+    """
+    PDF文書からテキストを抽出します。
+    
+    Args:
+        url: PDFファイルのURL
+        
+    Returns:
+        抽出されたテキストを含む文字列
+    """
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    res = loop.run_until_complete(_extract_pdf_async(url))
+    loop.close()
+    return res
+
+async def _extract_pdf_async(url: str):
+    """非同期でPDFテキスト抽出"""
+    if not url.lower().endswith('.pdf'):
+        return "PDFファイルのURLではありません。.pdfで終わるURLを提供してください。"
+    
+    try:
+        import tempfile
+        import PyPDF2
+        import aiohttp
+        
+        # PDFファイルをダウンロード
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status != 200:
+                    return f"PDFダウンロード失敗: ステータスコード {response.status}"
+                
+                pdf_content = await response.read()
+        
+        # 一時ファイルに保存
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as temp_file:
+            temp_file_path = temp_file.name
+            temp_file.write(pdf_content)
+        
+        # PyPDF2でテキスト抽出
+        text_content = ""
+        with open(temp_file_path, 'rb') as f:
+            pdf_reader = PyPDF2.PdfReader(f)
+            num_pages = len(pdf_reader.pages)
+            
+            for page_num in range(num_pages):
+                page = pdf_reader.pages[page_num]
+                text_content += page.extract_text() + "\n\n"
+        
+        # 一時ファイルを削除
+        os.unlink(temp_file_path)
+        
+        # 結果をフォーマット
+        result = f"## PDFから抽出されたテキスト\n"
+        result += f"ソース: {url}\n"
+        result += f"ページ数: {num_pages}ページ\n\n"
+        result += "### 内容\n\n"
+        result += text_content
+        
+        # 長すぎる場合は切り詰める
+        max_length = 15000
+        if len(result) > max_length:
+            result = result[:max_length] + f"\n\n... (抽出されたテキストが長すぎるため切り詰められました。全体で{len(text_content)}文字)"
+        
+        return result
+    
+    except Exception as e:
+        return f"PDFテキスト抽出中にエラー: {str(e)}"
