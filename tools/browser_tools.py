@@ -2,7 +2,7 @@
 """
 強化されたブラウザ操作ツール。Playwrightを使用した高度なウェブスクレイピングと対話機能を提供。
 """
-import logging
+from core.logging_config import logger
 import asyncio
 import os
 import json
@@ -13,7 +13,7 @@ from sandbox.sandbox import get_sandbox
 from tools.tool_registry import tool
 from playwright.async_api import async_playwright, Page
 
-logger = logging.getLogger(__name__)
+
 
 # グローバル変数
 _browser_context = None
