@@ -8,6 +8,7 @@ import logging
 import json
 import os
 import time
+import re
 from typing import Dict, Any, Optional, List, Tuple
 
 from tools.tool_registry import ToolRegistry
@@ -437,7 +438,6 @@ class Agent:
         Returns:
             抽出されたツール呼び出し、見つからない場合はNone
         """
-        import re
         # ```json ... ```
         code_fence_match = re.search(r"```json\s*(\{.*?\})\s*```", llm_response, re.DOTALL)
         raw_json = None
