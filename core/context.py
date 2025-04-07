@@ -2,11 +2,11 @@
 """
 エージェントのイベントストリームとコンテキスト管理。
 """
-import logging
+from core.logging_config import logger
 from typing import List, Dict, Any, Optional
 from collections import deque
 
-logger = logging.getLogger(__name__)
+
 
 class Context:
     def __init__(self, max_events: int = 50):
