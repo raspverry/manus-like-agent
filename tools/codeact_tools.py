@@ -141,3 +141,19 @@ except Exception as e:
     import traceback
     print(traceback.format_exc())
 """
+    
+    # 分析実行のログ記録
+    logger.info(f"データ分析を実行: {data_file}")
+    
+    # Dockerサンドボックスでコードを実行
+    sandbox = get_sandbox()
+    stdout, stderr, exit_code = sandbox.execute_python(container_id or "codeact-session", enhanced_code)
+    
+    if stderr and exit_code != 0:
+        logger.warning(f"データ分析でエラー発生: {stderr[:100]}...")
+        return f"データ分析エラー:\n\n[stdout]\n{stdout}\n\n[stderr]\n{stderr}\nExitCode: {exit_code}"
+    else:
+        # 画像ファイルが生成されたかチェック (一般的なデータ可視化の結果)
+        # ここでは簡易的な例として、標準出力のみを返す
+        logger.info(f"データ分析成功: {data_file}")
+        return f"データ分析結果:\n\n{stdout}"
