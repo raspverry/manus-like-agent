@@ -1361,16 +1361,78 @@ def _request_llm_code_fix(code: str, error_message: str, container_id: Optional[
     Returns:
         修正結果の説明
     """
-    # 実際の実装では、LLMを呼び出してコード修正を依頼
-    # この例ではシンプルな提案だけ返す
-    analysis = (
-        "自動的な修正が適用できませんでした。エラーを分析した結果:\n\n"
-        f"エラーメッセージ: {error_message}\n\n"
-        "考えられる問題点:\n"
-        "1. 構文エラー - コードの書き方に問題がある可能性\n"
-        "2. ロジックエラー - アルゴリズムに問題がある可能性\n"
-        "3. 環境依存エラー - 実行環境に必要なライブラリが不足している可能性\n\n"
-        "手動でコードを確認して修正することをお勧めします。"
-    )
+    from config import CONFIG
     
-    return analysis
+    try:
+        # LLMクライアントを取得
+        from llm.azure_openai_client import AzureOpenAIClient
+        llm_client = AzureOpenAIClient()
+        
+        # 構造化出力を要求するシステムプロンプト
+        system_prompt = """あなたはPythonデバッグの専門家です。エラーの原因を分析し、修正したコードを提供してください。
+以下の形式で応答してください:
+
+{
+    "analysis": "エラーの原因と問題点の詳細な分析",
+    "fixed_code": "修正されたPythonコード全体",
+    "changes": "行った変更の説明"
+}
+
+必ず有効なJSONとして解析できるように応答してください。"""
+
+        # LLMにコード修正を依頼するプロンプト
+        prompt = f"""
+以下のPythonコードでエラーが発生しました。エラーの原因を分析し、修正したコードを提供してください。
+
+## 元のコード
+{code}
+
+## エラーメッセージ
+{error_message}
+"""
+        
+        # LLMの応答を取得
+        response_text = llm_client.call_azure_openai(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            model=CONFIG["llm"]["model"],
+            temperature=0.2,  # デバッグは低温度が適切
+            max_tokens=2000
+        )
+        
+        # JSONを抽出して解析
+        import re
+        import json
+        
+        # 応答からJSONを抽出
+        json_match = re.search(r"\{.*\}", response_text, re.DOTALL)
+        if not json_match:
+            return f"LLMは構造化された応答を返しませんでした。生の応答:\n\n{response_text}"
+        
+        try:
+            response_data = json.loads(json_match.group(0))
+            analysis = response_data.get("analysis", "分析情報なし")
+            fixed_code = response_data.get("fixed_code", "")
+            changes = response_data.get("changes", "変更点の説明なし")
+            
+            if not fixed_code:
+                return f"LLMは修正コードを提供できませんでした。分析結果:\n\n{analysis}"
+            
+            # 修正されたコードをテスト実行
+            if container_id:
+                sandbox = get_sandbox()
+                stdout, stderr, exit_code = sandbox.execute_python(container_id, fixed_code)
+                
+                if exit_code == 0:
+                    return f"LLMによる修正が成功しました！\n\n【分析】\n{analysis}\n\n【変更点】\n{changes}\n\n【修正コード】\n{fixed_code}\n\n【実行結果】\n{stdout}"
+                else:
+                    return f"LLMは修正を試みましたが、まだエラーがあります:\n\n【エラー】\n{stderr}\n\n【分析】\n{analysis}\n\n【変更点】\n{changes}\n\n【提案されたコード】\n{fixed_code}"
+            
+            return f"LLMによる修正提案:\n\n【分析】\n{analysis}\n\n【変更点】\n{changes}\n\n【修正コード】\n{fixed_code}"
+            
+        except json.JSONDecodeError:
+            return f"LLMの応答をJSONとして解析できませんでした。生の応答:\n\n{response_text}"
+    
+    except Exception as e:
+        logger.error(f"LLMコード修正中にエラー: {str(e)}")
+        return f"コード修正中にエラーが発生しました: {str(e)}\n\nエラーメッセージを確認して手動で修正することをお勧めします。"
