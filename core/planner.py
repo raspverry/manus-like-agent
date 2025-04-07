@@ -2,12 +2,12 @@
 """
 タスクをステップに分解するプランナーモジュール。
 """
-import logging
+from core.logging_config import logger
 import os
 import json
 from typing import Dict, Any, List, Optional
 
-logger = logging.getLogger(__name__)
+
 
 class Planner:
     def __init__(self, llm_client):
