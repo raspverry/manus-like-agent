@@ -40,13 +40,14 @@ def create_agent() -> Agent:
     
     # ツールレジストリ
     registry = ToolRegistry()
-    registry.register_tools_from_module("manus_project.tools.message_tools")
-    registry.register_tools_from_module("manus_project.tools.shell_tools")
-    registry.register_tools_from_module("manus_project.tools.file_tools")
-    registry.register_tools_from_module("manus_project.tools.info_tools")
-    registry.register_tools_from_module("manus_project.tools.deploy_tools")
-    registry.register_tools_from_module("manus_project.tools.browser_tools")
-    registry.register_tools_from_module("manus_project.tools.codeact_tools")
+    registry.register_tools_from_module("tools.message_tools")
+    registry.register_tools_from_module("tools.shell_tools")
+    registry.register_tools_from_module("tools.file_tools")
+    registry.register_tools_from_module("tools.info_tools")
+    registry.register_tools_from_module("tools.deploy_tools")
+    registry.register_tools_from_module("tools.browser_tools")
+    registry.register_tools_from_module("tools.codeact_tools")
+    registry.register_tools_from_module("tools.system_tools")
     
     # Planner
     planner = Planner(llm_client)
