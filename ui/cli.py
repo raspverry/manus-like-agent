@@ -4,7 +4,7 @@
 """
 import os
 import sys
-import logging
+from core.logging_config import logger
 import readline
 import atexit
 import threading
@@ -24,7 +24,7 @@ from ..llm.azure_openai_client import AzureOpenAIClient
 from ..tools import (message_tools, shell_tools, file_tools,
                      info_tools, deploy_tools, browser_tools, codeact_tools)
 
-logger = logging.getLogger(__name__)
+
 
 def create_agent() -> Agent:
     # システムプロンプト
