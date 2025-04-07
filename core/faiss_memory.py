@@ -4,7 +4,7 @@ FAISSを使用したベクトルメモリ実装。
 ChromaDBの代替としてより簡単にインストールできるFAISSを使用。
 """
 import os
-import logging
+from core.logging_config import logger
 import time
 import json
 import pickle
@@ -19,7 +19,7 @@ except ImportError:
     logging.error("FAISSがインストールされていません。'uv add faiss-cpu' を実行してください。")
     raise
 
-logger = logging.getLogger(__name__)
+
 
 class FAISSMemory:
     """
