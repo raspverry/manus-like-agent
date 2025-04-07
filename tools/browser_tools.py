@@ -7,8 +7,9 @@ import asyncio
 import os
 import json
 import re
-from typing import Optional, Union, Dict, Any, List
+from typing import Optional, Union, Dict, Any, List, Tuple
 from urllib.parse import urlparse
+from sandbox.sandbox import get_sandbox
 from tools.tool_registry import tool
 from playwright.async_api import async_playwright, Page
 
@@ -919,3 +920,457 @@ async def _extract_pdf_async(url: str):
     
     except Exception as e:
         return f"PDFテキスト抽出中にエラー: {str(e)}"
+    
+@tool(
+    name="codeact_auto_debug",
+    description="コードの自動デバッグと修正",
+    parameters={
+        "type": "object",
+        "properties": {
+            "code": {"type": "string", "description": "デバッグするコード"},
+            "error_message": {"type": "string", "description": "発生したエラーメッセージ"},
+            "container_id": {"type": "string", "description": "（オプション）既存コンテナID"}
+        },
+        "required": ["code", "error_message"]
+    }
+)
+def codeact_auto_debug(code: str, error_message: str, container_id: Optional[str] = None):
+    """
+    コードのエラーを分析して修正する自動デバッガー。
+    
+    Args:
+        code: エラーのあるコード
+        error_message: 発生したエラーメッセージ
+        container_id: コンテナID
+    
+    Returns:
+        デバッグ結果と修正されたコード
+    """
+    logger.info(f"自動デバッグ開始: エラーメッセージ長さ {len(error_message)}")
+    
+    # 元のコードを保存
+    original_code = code
+    
+    # エラータイプの分析ロジック
+    debug_comments = []
+    fixes_applied = []
+    
+    # エラータイプの判別と修正の適用
+    if "SyntaxError" in error_message:
+        code, comments, fixes = _fix_syntax_errors(code, error_message)
+        debug_comments.extend(comments)
+        fixes_applied.extend(fixes)
+    elif "NameError" in error_message:
+        code, comments, fixes = _fix_name_errors(code, error_message)
+        debug_comments.extend(comments)
+        fixes_applied.extend(fixes)
+    elif "ImportError" in error_message or "ModuleNotFoundError" in error_message:
+        code, comments, fixes = _fix_import_errors(code, error_message)
+        debug_comments.extend(comments)
+        fixes_applied.extend(fixes)
+    elif "TypeError" in error_message:
+        code, comments, fixes = _fix_type_errors(code, error_message)
+        debug_comments.extend(comments)
+        fixes_applied.extend(fixes)
+    elif "IndexError" in error_message or "KeyError" in error_message:
+        code, comments, fixes = _fix_index_key_errors(code, error_message)
+        debug_comments.extend(comments)
+        fixes_applied.extend(fixes)
+    
+    # 修正したコードの実行テスト
+    if fixes_applied:
+        logger.info(f"修正適用: {', '.join(fixes_applied)}")
+        debug_comments_str = "\n".join(debug_comments)
+        code_with_comments = f"{debug_comments_str}\n\n{code}"
+        
+        # 修正したコードを実行
+        sandbox = get_sandbox()
+        stdout, stderr, exit_code = sandbox.execute_python(container_id or "codeact-debug", code)
+        
+        if exit_code == 0:
+            return f"コード修正成功！\n\n適用した修正: {', '.join(fixes_applied)}\n\n修正後のコード:\n{code_with_comments}\n\n実行結果:\n{stdout}"
+        else:
+            return f"コード修正を試みましたが、まだエラーがあります:\n\n{stderr}\n\n部分的に修正されたコード:\n{code_with_comments}"
+    
+    # LLMに修正を依頼する
+    if not fixes_applied:
+        return _request_llm_code_fix(original_code, error_message, container_id)
+    
+    return f"コード分析完了しましたが、自動修正できません。エラーメッセージを確認してください:\n{error_message}"
+
+def _fix_syntax_errors(code: str, error_message: str) -> Tuple[str, List[str], List[str]]:
+    """
+    構文エラーを修正する
+    
+    Args:
+        code: コード
+        error_message: エラーメッセージ
+        
+    Returns:
+        修正されたコード、デバッグコメント、適用された修正のリスト
+    """
+    debug_comments = []
+    fixes_applied = []
+    
+    # 文字列リテラルが閉じられていない問題を解決
+    if "EOL while scanning string literal" in error_message:
+        debug_comments.append("# 文字列リテラルが閉じられていません")
+        
+        # 行番号を取得
+        line_match = re.search(r"line (\d+)", error_message)
+        if line_match:
+            line_num = int(line_match.group(1))
+            lines = code.split('\n')
+            
+            if 0 < line_num <= len(lines):
+                problem_line = lines[line_num - 1]
+                
+                # シングルクォートかダブルクォートかを判断
+                if "'" in problem_line and problem_line.count("'") % 2 == 1:
+                    lines[line_num - 1] = problem_line + "'"
+                    fixes_applied.append("閉じていないシングルクォートを追加")
+                elif '"' in problem_line and problem_line.count('"') % 2 == 1:
+                    lines[line_num - 1] = problem_line + '"'
+                    fixes_applied.append("閉じていないダブルクォートを追加")
+                
+                code = '\n'.join(lines)
+    
+    # インデントエラーを修正
+    elif "unexpected indent" in error_message or "expected an indented block" in error_message:
+        debug_comments.append("# インデントエラーがあります")
+        
+        line_match = re.search(r"line (\d+)", error_message)
+        if line_match:
+            line_num = int(line_match.group(1))
+            lines = code.split('\n')
+            
+            if 0 < line_num <= len(lines):
+                # インデントの問題がある行
+                current_line = lines[line_num - 1]
+                prev_line = lines[line_num - 2] if line_num > 1 else ""
+                
+                # インデントレベルを調整
+                if "unexpected indent" in error_message:
+                    # インデントが多すぎる場合はタブスペースを減らす
+                    current_indent = len(current_line) - len(current_line.lstrip())
+                    prev_indent = len(prev_line) - len(prev_line.lstrip())
+                    
+                    if current_indent > prev_indent:
+                        # 前の行と同じインデントに修正
+                        lines[line_num - 1] = ' ' * prev_indent + current_line.lstrip()
+                        fixes_applied.append("過剰なインデントを修正")
+                
+                elif "expected an indented block" in error_message:
+                    # インデントが足りない場合はタブスペースを追加
+                    current_indent = len(current_line) - len(current_line.lstrip())
+                    if prev_line.strip().endswith(':'):
+                        # コロンの後は4スペースインデント追加
+                        lines[line_num - 1] = ' ' * (current_indent + 4) + current_line.lstrip()
+                        fixes_applied.append("足りないインデントを追加")
+                
+                code = '\n'.join(lines)
+    
+    # 対応する括弧の閉じ忘れ
+    elif "unexpected EOF while parsing" in error_message:
+        debug_comments.append("# 括弧が閉じられていない可能性があります")
+        
+        # 括弧カウントを確認
+        open_parentheses = code.count('(')
+        close_parentheses = code.count(')')
+        open_brackets = code.count('[')
+        close_brackets = code.count(']')
+        open_braces = code.count('{')
+        close_braces = code.count('}')
+        
+        # 括弧不足を追加
+        if open_parentheses > close_parentheses:
+            code += ')' * (open_parentheses - close_parentheses)
+            fixes_applied.append(f"閉じ括弧 ) を {open_parentheses - close_parentheses} 個追加")
+        if open_brackets > close_brackets:
+            code += ']' * (open_brackets - close_brackets)
+            fixes_applied.append(f"閉じ括弧 ] を {open_brackets - close_brackets} 個追加")
+        if open_braces > close_braces:
+            code += '}' * (open_braces - close_braces)
+            fixes_applied.append(f"閉じ括弧 }} を {open_braces - close_braces} 個追加")
+    
+    return code, debug_comments, fixes_applied
+
+def _fix_name_errors(code: str, error_message: str) -> Tuple[str, List[str], List[str]]:
+    """
+    名前エラーを修正する
+    
+    Args:
+        code: コード
+        error_message: エラーメッセージ
+        
+    Returns:
+        修正されたコード、デバッグコメント、適用された修正のリスト
+    """
+    debug_comments = []
+    fixes_applied = []
+    
+    # 'X' is not defined エラーの修正
+    name_match = re.search(r"name '(.+)' is not defined", error_message)
+    if name_match:
+        var_name = name_match.group(1)
+        debug_comments.append(f"# 変数 '{var_name}' が定義されていません")
+        
+        # 組み込み関数/モジュールの誤字修正
+        common_builtins = {
+            'prit': 'print',
+            'lne': 'len',
+            'ragne': 'range',
+            'iput': 'input',
+            'mian': 'main',
+            'strig': 'string',
+            'flase': 'False',
+            'ture': 'True',
+            'noe': 'None'
+        }
+        
+        # 変数名が誤字の場合、修正
+        if var_name.lower() in common_builtins:
+            correct_name = common_builtins[var_name.lower()]
+            code = re.sub(r'\b' + re.escape(var_name) + r'\b', correct_name, code)
+            fixes_applied.append(f"誤字を修正: {var_name} → {correct_name}")
+            return code, debug_comments, fixes_applied
+        
+        # インポートの追加
+        common_modules = {
+            'pd': 'import pandas as pd',
+            'np': 'import numpy as np',
+            'plt': 'import matplotlib.pyplot as plt',
+            'os': 'import os',
+            're': 'import re',
+            'json': 'import json',
+            'requests': 'import requests',
+            'math': 'import math',
+            'datetime': 'from datetime import datetime'
+        }
+        
+        if var_name in common_modules:
+            import_line = common_modules[var_name]
+            code = import_line + '\n\n' + code
+            fixes_applied.append(f"インポート追加: {import_line}")
+            return code, debug_comments, fixes_applied
+        
+        # 未定義の変数に初期値を設定
+        # 特定のパターンに対応するダミー値を割り当て
+        if var_name.lower().endswith(('list', 'array', 'items', 'elements')):
+            code = f"{var_name} = []\n" + code
+            fixes_applied.append(f"空リストを初期化: {var_name} = []")
+        elif var_name.lower().endswith(('dict', 'map', 'mapping')):
+            code = f"{var_name} = {{}}\n" + code
+            fixes_applied.append(f"空辞書を初期化: {var_name} = {{}}")
+        elif var_name.lower().endswith(('str', 'string', 'text', 'name')):
+            code = f"{var_name} = ''\n" + code
+            fixes_applied.append(f"空文字列を初期化: {var_name} = ''")
+        elif var_name.lower().endswith(('num', 'count', 'index', 'i', 'j')):
+            code = f"{var_name} = 0\n" + code
+            fixes_applied.append(f"数値を初期化: {var_name} = 0")
+        else:
+            code = f"{var_name} = None  # 自動修正で追加\n" + code
+            fixes_applied.append(f"変数を初期化: {var_name} = None")
+    
+    return code, debug_comments, fixes_applied
+
+def _fix_import_errors(code: str, error_message: str) -> Tuple[str, List[str], List[str]]:
+    """
+    インポートエラーを修正する
+    
+    Args:
+        code: コード
+        error_message: エラーメッセージ
+        
+    Returns:
+        修正されたコード、デバッグコメント、適用された修正のリスト
+    """
+    debug_comments = []
+    fixes_applied = []
+    
+    # モジュールインポートエラーの修正
+    module_match = re.search(r"No module named '(.+)'", error_message)
+    if module_match:
+        module_name = module_match.group(1)
+        debug_comments.append(f"# モジュール '{module_name}' がインストールされていません")
+        
+        # 誤字修正
+        common_typos = {
+            'padas': 'pandas',
+            'nummpy': 'numpy',
+            'matplolib': 'matplotlib',
+            'sicpy': 'scipy',
+            'sklearn': 'scikit-learn',
+            'beautifulsop': 'beautifulsoup4',
+            'requets': 'requests'
+        }
+        
+        if module_name in common_typos:
+            correct_name = common_typos[module_name]
+            code = code.replace(f"import {module_name}", f"import {correct_name}")
+            code = code.replace(f"from {module_name}", f"from {correct_name}")
+            fixes_applied.append(f"モジュール名の誤字を修正: {module_name} → {correct_name}")
+            
+            # pip installコメントを追加
+            debug_comments.append(f"# 注: '{correct_name}' が必要な場合は pip install {correct_name} でインストール")
+        else:
+            # インストールコメントを追加
+            debug_comments.append(f"# 注: '{module_name}' が必要な場合は pip install {module_name} でインストール")
+            
+            # 代替モジュールの提案
+            if module_name == 'pandas':
+                debug_comments.append("# 代替: 基本的なCSV処理にはcsv標準モジュールを使用できます")
+                fixes_applied.append("pandasの代わりにcsvモジュールを提案")
+            elif module_name == 'numpy':
+                debug_comments.append("# 代替: 単純な数値計算ならmathモジュールを使用できます")
+                fixes_applied.append("numpyの代わりにmathモジュールを提案")
+            elif module_name == 'matplotlib':
+                debug_comments.append("# 代替: データ出力には標準ライブラリの出力機能を使用できます")
+                fixes_applied.append("matplotlibの代わりに標準出力を提案")
+    
+    # 名前インポートエラーの修正
+    import_name_match = re.search(r"cannot import name '(.+)' from '(.+)'", error_message)
+    if import_name_match:
+        name = import_name_match.group(1)
+        module = import_name_match.group(2)
+        debug_comments.append(f"# モジュール '{module}' から '{name}' をインポートできません")
+        
+        # 一般的な修正
+        common_fixes = {
+            ('pyplot', 'matplotlib'): 'from matplotlib import pyplot',
+            ('DataFrame', 'pandas'): 'from pandas import DataFrame',
+            ('train_test_split', 'sklearn'): 'from sklearn.model_selection import train_test_split'
+        }
+        
+        fix_key = (name, module)
+        if fix_key in common_fixes:
+            correct_import = common_fixes[fix_key]
+            # 元のインポート文を探して置き換え
+            import_pattern = rf"from\s+{re.escape(module)}\s+import\s+.*{re.escape(name)}"
+            if re.search(import_pattern, code):
+                code = re.sub(import_pattern, correct_import, code)
+            else:
+                code = correct_import + '\n' + code
+            fixes_applied.append(f"インポート文を修正: {correct_import}")
+    
+    return code, debug_comments, fixes_applied
+
+def _fix_type_errors(code: str, error_message: str) -> Tuple[str, List[str], List[str]]:
+    """
+    型エラーを修正する
+    
+    Args:
+        code: コード
+        error_message: エラーメッセージ
+        
+    Returns:
+        修正されたコード、デバッグコメント、適用された修正のリスト
+    """
+    debug_comments = []
+    fixes_applied = []
+    
+    # 'X' is not callable エラーの修正
+    not_callable_match = re.search(r"'(.+)' object is not callable", error_message)
+    if not_callable_match:
+        obj_name = not_callable_match.group(1)
+        debug_comments.append(f"# '{obj_name}' オブジェクトは呼び出し可能ではありません")
+        
+        # 関数名と変数名の混同チェック
+        # 例: `list = [1, 2, 3]` の後に `list(x)` を呼ぶ
+        if obj_name in ['list', 'dict', 'int', 'str', 'set', 'tuple']:
+            # 変数名を変更
+            var_pattern = rf"{obj_name}\s*="
+            if re.search(var_pattern, code):
+                new_var_name = f"my_{obj_name}"
+                code = re.sub(var_pattern, f"{new_var_name} =", code)
+                fixes_applied.append(f"組み込み型名の変数を改名: {obj_name} → {new_var_name}")
+    
+    # 'X' is not subscriptable エラーの修正
+    not_subscriptable_match = re.search(r"'(.+)' object is not subscriptable", error_message)
+    if not_subscriptable_match:
+        obj_name = not_subscriptable_match.group(1)
+        debug_comments.append(f"# '{obj_name}' オブジェクトはインデックス付け可能ではありません")
+        
+        # よくある間違い: intやNoneにインデックス付けしている
+        if obj_name == 'int':
+            debug_comments.append("# 数値型にはインデックス付けできません。リストや辞書を使う必要があります")
+            fixes_applied.append("int型へのインデックス付けを特定")
+        elif obj_name == 'NoneType':
+            debug_comments.append("# None型にはインデックス付けできません。変数が初期化されているか確認してください")
+            fixes_applied.append("None型へのインデックス付けを特定")
+    
+    # シーケンス結合エラーの修正
+    concat_match = re.search(r"can only concatenate (.+) \(not \"(.+)\"\) to (.+)", error_message)
+    if concat_match:
+        type1 = concat_match.group(1)
+        type2 = concat_match.group(2)
+        debug_comments.append(f"# {type1}型と{type2}型を直接連結できません")
+        
+        # 文字列と数値の連結
+        if (type1 == 'str' and type2 in ['int', 'float']) or (type1 in ['int', 'float'] and type2 == 'str'):
+            # 文字列連結を + から f-stringまたはstr()に変更
+            # 正確なコード箇所を特定できないので、コメントで提案
+            debug_comments.append("# 修正案: 数値を文字列に変換してから連結する")
+            debug_comments.append("# 例: value + 5  →  value + str(5) または f\"{value}{5}\"")
+            fixes_applied.append("型変換による連結エラーの修正を提案")
+    
+    return code, debug_comments, fixes_applied
+
+def _fix_index_key_errors(code: str, error_message: str) -> Tuple[str, List[str], List[str]]:
+    """
+    インデックスまたはキーエラーを修正する
+    
+    Args:
+        code: コード
+        error_message: エラーメッセージ
+        
+    Returns:
+        修正されたコード、デバッグコメント、適用された修正のリスト
+    """
+    debug_comments = []
+    fixes_applied = []
+    
+    # インデックスエラーを修正
+    if "IndexError: list index out of range" in error_message:
+        debug_comments.append("# リストのインデックスが範囲外です")
+        debug_comments.append("# 修正案: アクセス前にリストの長さをチェックする")
+        debug_comments.append("# 例: if i < len(my_list): value = my_list[i]")
+        fixes_applied.append("インデックスチェックを提案")
+    
+    # キーエラーを修正
+    key_match = re.search(r"KeyError: '(.+)'", error_message)
+    if key_match:
+        key_name = key_match.group(1)
+        debug_comments.append(f"# 辞書にキー '{key_name}' が存在しません")
+        debug_comments.append(f"# 修正案: 辞書アクセス前にキーの存在をチェックする")
+        debug_comments.append(f"# 例: if '{key_name}' in my_dict: value = my_dict['{key_name}']")
+        debug_comments.append(f"# または: value = my_dict.get('{key_name}', default_value)")
+        fixes_applied.append("キー存在チェックと.getメソッドの使用を提案")
+    
+    return code, debug_comments, fixes_applied
+
+def _request_llm_code_fix(code: str, error_message: str, container_id: Optional[str] = None) -> str:
+    """
+    LLMにコード修正を依頼する
+    
+    Args:
+        code: 修正前コード
+        error_message: エラーメッセージ
+        container_id: コンテナID
+        
+    Returns:
+        修正結果の説明
+    """
+    # 実際の実装では、LLMを呼び出してコード修正を依頼
+    # この例ではシンプルな提案だけ返す
+    analysis = (
+        "自動的な修正が適用できませんでした。エラーを分析した結果:\n\n"
+        f"エラーメッセージ: {error_message}\n\n"
+        "考えられる問題点:\n"
+        "1. 構文エラー - コードの書き方に問題がある可能性\n"
+        "2. ロジックエラー - アルゴリズムに問題がある可能性\n"
+        "3. 環境依存エラー - 実行環境に必要なライブラリが不足している可能性\n\n"
+        "手動でコードを確認して修正することをお勧めします。"
+    )
+    
+    return analysis
