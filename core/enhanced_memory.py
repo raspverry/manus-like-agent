@@ -338,6 +338,134 @@ class EnhancedMemory(Memory):
         else:
             return ""
     
+    def _expand_query(self, query: str) -> str:
+        """
+        検索クエリを拡張して関連性の幅を広げます。
+        
+        Args:
+            query: 元のクエリ
+            
+        Returns:
+            拡張されたクエリ
+        """
+        # 基本的なクエリ拡張（実際の実装ではより高度な手法を使用可能）
+        # 例：キーワード抽出、同義語追加など
+        expanded_terms = []
+        
+        # クエリから主要キーワードを抽出
+        words = query.split()
+        keywords = [word for word in words if len(word) > 3 and word.lower() not in 
+                   ['with', 'that', 'this', 'from', 'what', 'when', 'where', 'which', 'about']]
+        
+        # 拡張クエリの作成
+        if keywords:
+            expanded_query = f"{query} {' '.join(keywords)}"
+            return expanded_query
+        
+        return query
+    
+    def _rerank_results(self, results: List[Tuple[str, Dict[str, Any], float]], query: str) -> List[Tuple[str, Dict[str, Any], float]]:
+        """
+        検索結果を再ランク付けします。
+        
+        Args:
+            results: 元の検索結果（テキスト、メタデータ、スコアのタプルリスト）
+            query: 元のクエリ
+            
+        Returns:
+            再ランク付けされた結果
+        """
+        if not results:
+            return results
+        
+        # クエリ内の重要キーワードを抽出
+        query_keywords = set([w.lower() for w in query.split() if len(w) > 3])
+        
+        # 各結果のスコアを再計算
+        scored_results = []
+        for text, metadata, original_score in results:
+            # 基本スコアは元のベクトル類似度
+            new_score = original_score
+            
+            # テキスト内のキーワード一致でボーナス
+            for keyword in query_keywords:
+                if keyword in text.lower():
+                    new_score += 0.1  # キーワード一致ボーナス
+            
+            # 最近のエントリにボーナス
+            if 'timestamp' in metadata:
+                time_diff = time.time() - metadata['timestamp']
+                if time_diff < 3600:  # 1時間以内
+                    new_score += 0.1
+                elif time_diff < 86400:  # 24時間以内
+                    new_score += 0.05
+            
+            # メタデータタイプによるボーナス（例：コード実行結果は価値が高い）
+            if metadata.get('type') == 'code_execution':
+                new_score += 0.1
+            
+            scored_results.append((text, metadata, new_score))
+        
+        # スコアで降順ソート
+        return sorted(scored_results, key=lambda x: x[2], reverse=True)
+    
+    def _format_knowledge_results(self, results: List[Tuple[str, Dict[str, Any], float]]) -> str:
+        """
+        検索結果を読みやすくフォーマットします。
+        
+        Args:
+            results: ランク付けされた結果リスト
+            
+        Returns:
+            フォーマットされたテキスト
+        """
+        if not results:
+            return "関連情報は見つかりませんでした。"
+        
+        formatted_lines = ["## 関連知識"]
+        
+        for i, (text, metadata, score) in enumerate(results, 1):
+            # メタデータからソース情報を抽出
+            source_type = metadata.get('type', 'unknown')
+            source = metadata.get('source', 'unknown')
+            timestamp = metadata.get('timestamp', 0)
+            time_str = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S') if timestamp else 'N/A'
+            
+            # エントリタイプに応じたヘッダーを作成
+            if source_type == 'code_execution':
+                header = f"### {i}. コード実行結果 (関連度: {score:.2f})"
+            elif source_type == 'data_analysis':
+                data_file = metadata.get('data_file', 'unknown')
+                header = f"### {i}. データ分析: {os.path.basename(data_file)} (関連度: {score:.2f})"
+            elif source.startswith('web:'):
+                url = source.replace('web:', '')
+                header = f"### {i}. Web情報: {url} (関連度: {score:.2f})"
+            elif source.startswith('search:'):
+                query = source.replace('search:', '')
+                header = f"### {i}. 検索結果: '{query}' (関連度: {score:.2f})"
+            elif source.startswith('file:'):
+                filename = source.replace('file:', '')
+                header = f"### {i}. ファイル: {filename} (関連度: {score:.2f})"
+            else:
+                header = f"### {i}. 関連情報 (関連度: {score:.2f})"
+            
+            # 結果テキストを加工（長すぎる場合は切り詰める）
+            if len(text) > 500:
+                display_text = text[:500] + "..."
+            else:
+                display_text = text
+            
+            # 最終的な結果エントリ
+            formatted_lines.extend([
+                header,
+                f"時間: {time_str}",
+                f"内容:",
+                f"{display_text}",
+                ""  # 空行を追加
+            ])
+        
+        return "\n".join(formatted_lines)
+    
     def get_relevant_knowledge(self, query: str, limit: int = 3) -> str:
         """
         クエリに関連する知識を取得します。
@@ -351,8 +479,18 @@ class EnhancedMemory(Memory):
         """
         if not self._vector_memory_available:
             return "ベクトルメモリシステムが利用できないため、関連知識を取得できません。"
-            
-        return self.vector_memory.get_relevant_context(query, limit)
+        
+        # クエリを拡張
+        expanded_query = self._expand_query(query)
+        
+        # 関連コンテキストを取得
+        results = self.vector_memory.search(expanded_query, limit)
+        
+        # 結果の再ランク付け
+        reranked_results = self._rerank_results(results, query)
+        
+        # 結果のフォーマット
+        return self._format_knowledge_results(reranked_results)
     
     def get_code_history_summary(self, limit: int = 5) -> str:
         """
