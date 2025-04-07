@@ -40,6 +40,12 @@ BASE_CONFIG: Dict[str, Any] = {
         "info": {"enabled": True, "search_max_results": 5},
         "deploy": {"enabled": True, "allowed_ports": [3000, 5000, 8000, 8080]},
     },
+    "codeact": {
+        "enabled": True,
+        "timeout_seconds": 60,
+        "allowed_modules": ["os", "pandas", "numpy", "matplotlib", "requests", "bs4"],
+        "max_iterations": 5
+    },
     "memory": {
         "todo_file": "todo.md",
         "notes_file": "notes.md",
