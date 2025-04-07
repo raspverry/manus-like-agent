@@ -3,12 +3,12 @@
 ファイル操作を行うツール。
 """
 import os
-import logging
+from core.logging_config import logger
 import re
 from tools.tool_registry import tool
 from sandbox.sandbox import get_sandbox
 
-logger = logging.getLogger(__name__)
+
 
 @tool(
     name="file_read",
