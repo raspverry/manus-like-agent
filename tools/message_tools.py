@@ -2,11 +2,11 @@
 """
 ユーザーへのメッセージ送信・受信を扱うツール。
 """
-import logging
+from core.logging_config import logger
 from typing import Union, List
 from tools.tool_registry import tool
 
-logger = logging.getLogger(__name__)
+
 
 @tool(
     name="message_notify_user",
