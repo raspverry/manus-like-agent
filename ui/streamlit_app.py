@@ -63,6 +63,7 @@ def create_agent() -> Agent:
     registry.register_tools_from_module("tools.deploy_tools")
     registry.register_tools_from_module("tools.browser_tools")
     registry.register_tools_from_module("tools.codeact_tools")
+    registry.register_tools_from_module("tools.system_tools")
     
     # メッセージツールをオーバーライド
     registry.register_tool(
