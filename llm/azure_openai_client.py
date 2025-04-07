@@ -1,53 +1,94 @@
 # llm/azure_openai_client.py
-import os
-from openai import AzureOpenAI
-import logging
+"""
+Azure OpenAI クライアント（最新版・JSON モード対応）
+====================================================
+* Azure OpenAI 専用エンドポイントでチャット補完を呼び出す。
+* `response_format={"type": "json_object"}` を任意で指定可能。
+* トークン使用量を含む usage 辞書を返却。
+* SDK v1 系列に依存し、追加の `openai.types` インポートは不要。
+"""
 
-logger = logging.getLogger(__name__)
+from __future__ import annotations
+
+from core.logging_config import logger
+import os
+from typing import Any, Dict, List, Tuple
+
+from openai import AzureOpenAI
+
+
+
 
 class AzureOpenAIClient:
-    def __init__(self):
-        # 環境変数から設定を取得
+    """Azure OpenAI Service ラッパー。"""
+
+    def __init__(self) -> None:
         api_key = os.getenv("AZURE_OPENAI_API_KEY")
-        azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
-        api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2023-07-01-preview")
-        deployment_name = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "deployment-name")
+        endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+        api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2023-12-01-preview")
+        deployment_name = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
 
-        if not api_key or not azure_endpoint or not deployment_name:
-            raise ValueError("Azure OpenAIの設定が不足しています (.envファイルを確認してください)")
+        if not all([api_key, endpoint, deployment_name]):
+            raise EnvironmentError("Azure OpenAI の環境変数が不足しています。")
 
-        # AzureOpenAIクライアントの初期化
-        self.client = AzureOpenAI(
+        self._client = AzureOpenAI(
             api_key=api_key,
-            azure_endpoint=azure_endpoint,
-            api_version=api_version
+            azure_endpoint=endpoint,
+            api_version=api_version,
         )
-        self.deployment_name = deployment_name
-        logger.info("Azure OpenAIクライアントが初期化されました")
+        self._deployment = deployment_name
+        logger.info("Azure OpenAI クライアント初期化完了")
 
-    def call_azure_openai(self, prompt: str, system_prompt: str, model: str, temperature: float, max_tokens: int) -> str:
+    # ---------------------------------------------------------
+    # チャット補完
+    # ---------------------------------------------------------
+    def chat_completion(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float = 0.2,
+        max_tokens: int = 2048,
+        force_json: bool = False,
+    ) -> Tuple[str, Dict[str, Any]]:
+        """ChatCompletion 呼び出し。
+
+        Returns:
+            content: 生成テキスト
+            usage:   {prompt_tokens, completion_tokens, total_tokens}
         """
-        Azure OpenAIでChatCompletionを呼び出し、応答テキストを返す。
-        """
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt}
-        ]
-        logger.info("Azure OpenAIへメッセージを送信中")
+        params: Dict[str, Any] = {
+            "model": self._deployment,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if force_json:
+            params["response_format"] = {"type": "json_object"}
+
         try:
-            completion = self.client.chat.completions.create(
-                model=self.deployment_name,  # デプロイメント名を指定
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens
-            )
-            # completion.to_json()は応答をJSON形式で返すので、choicesから内容を抽出
-            result = completion.to_json()
-            # 例: {"choices": [{"message": {"content": "返答テキスト", ...}}], ...}
-            if isinstance(result, dict) and "choices" in result:
-                return result["choices"][0]["message"]["content"]
-            else:
-                return str(result)
-        except Exception as e:
-            logger.error(f"Azure OpenAIエラー: {str(e)}")
+            resp = self._client.chat.completions.create(**params)
+            content = resp.choices[0].message.content or ""
+            usage = resp.usage.model_dump() if resp.usage else {}
+            return content, usage
+        except Exception as exc:
+            logger.error(f"Azure OpenAI 呼び出し失敗: {exc}")
             raise
+
+    def call_azure_openai(
+        self,
+        prompt: str,
+        system_prompt: str,
+        model: str,  # 無視されるが互換性のため残す
+        temperature: float,
+        max_tokens: int,
+        force_json: bool = False,
+    ) -> str:
+        content, _ = self.chat_completion(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=temperature,
+            max_tokens=max_tokens,
+            force_json=force_json,
+        )
+        return content
