@@ -22,6 +22,7 @@ from config import CONFIG
 logger = logging.getLogger(__name__)
 
 class Agent:
+    # core/agent.py (続き)
     def __init__(
         self,
         llm_client,
@@ -142,6 +143,9 @@ class Agent:
         max_time_seconds = CONFIG["agent_loop"]["max_time_seconds"]
         auto_summarize_threshold = CONFIG["agent_loop"]["auto_summarize_threshold"]
         
+        # ロギング改善
+        logger.info(f"エージェントループ開始: 最大{max_iter}回のイテレーション、制限時間{max_time_seconds}秒")
+        
         while self.is_running and iteration_count < max_iter:
             # 実行時間チェック
             elapsed_time = time.time() - self.start_time
@@ -158,50 +162,70 @@ class Agent:
             iteration_count += 1
             self.iterations = iteration_count
             
+            # 進捗状況の定期的な報告（新規追加）
+            if iteration_count % 10 == 0:
+                self._report_progress(is_final=False)
+            
             # コンテキスト自動要約（必要な場合）
             if auto_summarize_threshold > 0 and iteration_count - self.last_summary_iteration >= auto_summarize_threshold:
                 self._summarize_context()
                 self.last_summary_iteration = iteration_count
             
             # プロンプト構築とLLM呼び出し
-            prompt = self._build_prompt()
-            response = self._get_llm_response(prompt)
-            
-            # ツール呼び出しを抽出
-            tool_call = self._extract_tool_call(response)
-            if not tool_call:
-                logger.warning("有効なツール呼び出しが見つかりませんでした。再試行。")
-                self.context.add_event({"type": "Observation", "content": "ツール呼び出し抽出に失敗"})
-                continue
-            
-            if tool_call["name"] == "idle":
-                # タスク完了
-                reason = tool_call.get("parameters", {}).get("reason", "タスクが完了したため")
-                logger.info(f"エージェントがアイドル状態に入ります: {reason}")
-                self.tool_registry.execute_tool("message_notify_user", {
-                    "text": f"タスクが完了しました: {reason}"
-                })
-                self._report_progress(is_final=True)
-                self.is_running = False
-                break
-            
-            # ツール実行
-            self.context.add_event({"type": "Action", "tool": tool_call["name"], "content": tool_call})
             try:
-                logger.info(f"ツール実行: {tool_call['name']}")
-                result = self.tool_registry.execute_tool(tool_call["name"], tool_call.get("parameters", {}))
-                self.context.add_event({"type": "Observation", "tool": tool_call["name"], "content": result})
+                prompt = self._build_prompt()
+                response = self._get_llm_response(prompt)
                 
-                # メモリ更新
-                self.memory.update_from_observation(tool_call, result)
+                # ツール呼び出しを抽出
+                tool_call = self._extract_tool_call(response)
                 
-                # 特定のツールの場合は追加処理
-                self._handle_special_tool_results(tool_call, result)
+                # 有効なツール呼び出しがない場合の再試行ロジック強化
+                retry_count = 0
+                while not tool_call and retry_count < 3:
+                    retry_count += 1
+                    logger.warning(f"有効なツール呼び出しが見つかりませんでした。再試行 {retry_count}/3")
+                    # プロンプト強化
+                    enhanced_prompt = prompt + "\n\n前回の応答から有効なツール呼び出しを見つけられませんでした。有効なJSON形式でツールを呼び出してください。"
+                    response = self._get_llm_response(enhanced_prompt)
+                    tool_call = self._extract_tool_call(response)
                 
+                if not tool_call:
+                    logger.warning("最大再試行回数を超過しました。イテレーションをスキップします。")
+                    self.context.add_event({"type": "Observation", "content": "ツール呼び出し抽出に失敗"})
+                    continue
+                
+                if tool_call["name"] == "idle":
+                    # タスク完了
+                    reason = tool_call.get("parameters", {}).get("reason", "タスクが完了したため")
+                    logger.info(f"エージェントがアイドル状態に入ります: {reason}")
+                    self.tool_registry.execute_tool("message_notify_user", {
+                        "text": f"タスクが完了しました: {reason}"
+                    })
+                    self._report_progress(is_final=True)
+                    self.is_running = False
+                    break
+                
+                # ツール実行
+                self.context.add_event({"type": "Action", "tool": tool_call["name"], "content": tool_call})
+                try:
+                    logger.info(f"ツール実行: {tool_call['name']}")
+                    result = self.tool_registry.execute_tool(tool_call["name"], tool_call.get("parameters", {}))
+                    self.context.add_event({"type": "Observation", "tool": tool_call["name"], "content": result})
+                    
+                    # メモリ更新
+                    self.memory.update_from_observation(tool_call, result)
+                    
+                    # 特定のツールの場合は追加処理
+                    self._handle_special_tool_results(tool_call, result)
+                    
+                except Exception as e:
+                    error_msg = f"ツール {tool_call['name']} 実行中にエラー: {str(e)}"
+                    logger.error(error_msg)
+                    self.context.add_event({"type": "Observation", "tool": tool_call["name"], "error": str(e)})
+            
             except Exception as e:
-                error_msg = f"ツール {tool_call['name']} 実行中にエラー: {str(e)}"
-                logger.error(error_msg)
-                self.context.add_event({"type": "Observation", "tool": tool_call["name"], "error": str(e)})
+                logger.error(f"イテレーション{iteration_count}の処理中に例外が発生: {str(e)}")
+                self.context.add_event({"type": "Observation", "content": f"エラー: {str(e)}"})
         
         # ループ終了後の処理
         if self.iterations >= max_iter:
@@ -349,6 +373,11 @@ class Agent:
                 if len(self.memory.file_registry) > 5:
                     message += f" 他 {len(self.memory.file_registry) - 5}件"
                 message += "\n"
+        
+        # 最近実行されたコードの概要（追加）
+        if hasattr(self.memory, 'code_history') and self.memory.code_history:
+            recent_code = self.memory.code_history[-1]
+            message += f"\n最近のコード実行: {recent_code['description']}\n"
         
         try:
             # 報告
