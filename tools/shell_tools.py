@@ -2,12 +2,12 @@
 """
 Dockerサンドボックスでshellコマンドを実行するツール。
 """
-import logging
+from core.logging_config import logger
 from typing import Optional
 from tools.tool_registry import tool
 from sandbox.sandbox import get_sandbox
 
-logger = logging.getLogger(__name__)
+
 
 _shell_sessions = {}
 
