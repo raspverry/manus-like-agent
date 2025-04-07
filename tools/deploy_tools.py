@@ -2,11 +2,11 @@
 """
 デプロイに関するツール（デモ）。
 """
-import logging
+from core.logging_config import logger
 import os
 from tools.tool_registry import tool
 
-logger = logging.getLogger(__name__)
+
 
 @tool(
     name="deploy_expose_port",
