@@ -3,11 +3,11 @@
 検索エンジンを使用したWeb検索などの情報取得ツール。
 (実際はAPI利用だが、ここではデモ用)
 """
-import logging
+from core.logging_config import logger
 import random
 from tools.tool_registry import tool
 
-logger = logging.getLogger(__name__)
+
 
 DEMO_SEARCH = {
     "ai": [
