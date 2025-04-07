@@ -3,14 +3,14 @@
 強化されたCodeActツール: LLMがPythonコードを生成し、それをDockerサンドボックスで実行する。
 Manusのようなエージェントシステムで、コードをアクションとして使用する「CodeAct」パラダイムを実装。
 """
-import logging
+from core.logging_config import logger
 from typing import Optional, Dict, Any
 import json
 import time
 from tools.tool_registry import tool
 from sandbox.sandbox import get_sandbox
 
-logger = logging.getLogger(__name__)
+
 
 @tool(
     name="code_execute",
