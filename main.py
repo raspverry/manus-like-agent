@@ -6,7 +6,7 @@ CLIまたはStreamlit WebUIのいずれかを起動します。
 
 import os
 import sys
-import logging
+from core.logging_config import logger
 import argparse
 
 from dotenv import load_dotenv
@@ -16,7 +16,6 @@ load_dotenv()
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 def main():
-    logging.basicConfig(level=logging.INFO)
     
     parser = argparse.ArgumentParser(description="Manus-Like Agent")
     parser.add_argument("--task", help="初期タスクの説明")
@@ -33,7 +32,7 @@ def main():
             print("\nプログラムが中断されました")
             sys.exit(0)
         except Exception as e:
-            logging.error(f"予期しないエラーが発生しました: {str(e)}", exc_info=True)
+            logger.error(f"予期しないエラーが発生しました: {str(e)}", exc_info=True)
             sys.exit(1)
     else:
         # Streamlit WebUI起動
@@ -58,7 +57,7 @@ def main():
             print("\nStreamlit WebUIが中断されました")
             sys.exit(0)
         except Exception as e:
-            logging.error(f"Streamlit起動中にエラーが発生しました: {str(e)}", exc_info=True)
+            logger.error(f"Streamlit起動中にエラーが発生しました: {str(e)}", exc_info=True)
             print("\n代わりにCLIを使用するには: python main.py --ui cli")
             sys.exit(1)
 
