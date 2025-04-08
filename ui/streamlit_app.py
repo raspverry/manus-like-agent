@@ -3,15 +3,17 @@
 Streamlitを使用したウェブインターフェース（旧 UI レイアウト + 無限ループ修正）
 """
 
+from __future__ import annotations
+
 import os
 import sys
-from core.logging_config import logger
 import threading
-import time
 import queue
 from typing import Any, Dict
 
 import streamlit as st
+
+from core.logging_config import logger
 
 # プロジェクトルートを import パスに追加
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -24,23 +26,19 @@ from llm.azure_openai_client import AzureOpenAIClient
 from core.memory import Memory
 from core.enhanced_memory import EnhancedMemory
 
-
-
 # ------------------------------------------------------------------
-# メッセージキュー
+# メッセージキュー（agent → UI）
 # ------------------------------------------------------------------
 msg_queue: queue.Queue = queue.Queue()
-
 
 # ------------------------------------------------------------------
 # Agent 生成
 # ------------------------------------------------------------------
 def create_agent() -> Agent:
-    prompt_dir = CONFIG["system"]["prompt_dir"]
-    try:
-        with open(os.path.join(prompt_dir, "system_prompt.txt"), encoding="utf-8") as f:
-            system_prompt = f.read()
-    except FileNotFoundError:
+    prompt_path = os.path.join(CONFIG["system"]["prompt_dir"], "system_prompt.txt")
+    if os.path.exists(prompt_path):
+        system_prompt = open(prompt_path, encoding="utf-8").read()
+    else:
         system_prompt = "あなたはManusのようなエージェントです。"
 
     llm_client = AzureOpenAIClient()
@@ -59,7 +57,7 @@ def create_agent() -> Agent:
     ]:
         registry.register_tools_from_module(mod)
 
-    # message ツールを UI キューに差し替え
+    # UI に転送するメッセージツール
     registry.register_tool(
         "message_notify_user",
         lambda text, attachments=None: msg_queue.put(("notify", text)),
@@ -67,13 +65,11 @@ def create_agent() -> Agent:
     )
     registry.register_tool(
         "message_ask_user",
-        lambda text, attachments=None, suggest_user_takeover="none": msg_queue.put(
-            ("ask", text)
-        ),
+        lambda text, attachments=None, suggest_user_takeover="none": msg_queue.put(("ask", text)),
         registry.get_tool_spec("message_ask_user"),
     )
 
-    # Memory
+    # メモリ
     if CONFIG["memory"].get("use_vector_memory", False):
         memory = EnhancedMemory(workspace_dir=CONFIG["system"]["workspace_dir"])
     else:
@@ -81,24 +77,19 @@ def create_agent() -> Agent:
 
     return Agent(llm_client, system_prompt, registry, planner, memory)
 
-
 # ------------------------------------------------------------------
-# Agent 実行スレッド
+# Agent 実行スレッド（改良版：直接 agent.start を実行）
 # ------------------------------------------------------------------
 def run_agent(agent: Agent, task_input: str, stop_event: threading.Event):
-    def _runner():
-        try:
-            msg_queue.put(("status", "🟢 エージェントが起動しました"))
-            agent.start(task_input)
-            msg_queue.put(("status", "✅ エージェントが完了しました"))
-        except Exception as exc:
-            logger.error(f"Agent 実行エラー: {exc}", exc_info=True)
-            msg_queue.put(("error", f"エラー: {exc}"))
-        finally:
-            stop_event.set()
-
-    threading.Thread(target=_runner, daemon=True).start()
-
+    try:
+        msg_queue.put(("status", "🟢 エージェントが起動しました"))
+        agent.start(task_input)
+        msg_queue.put(("status", "✅ エージェントが完了しました"))
+    except Exception as exc:
+        logger.error("Agent 実行エラー", exc_info=True)
+        msg_queue.put(("error", f"エラー: {exc}"))
+    finally:
+        stop_event.set()
 
 # ------------------------------------------------------------------
 # Streamlit アプリ
@@ -110,7 +101,7 @@ def main():
     if "agent" not in st.session_state:
         st.session_state.agent = create_agent()
     if "agent_thread" not in st.session_state:
-        st.session_state.agent_thread = None
+        st.session_state.agent_thread: threading.Thread | None = None
     if "stop_event" not in st.session_state:
         st.session_state.stop_event = threading.Event()
     if "messages" not in st.session_state:
@@ -143,8 +134,16 @@ def main():
     with col1:
         st.subheader("エージェントとの対話")
         for m in st.session_state.messages:
-            with st.chat_message("user" if m["type"] == "user" else "assistant"):
-                st.markdown(m["content"])
+            if m["type"] == "user":
+                with st.chat_message("user"):
+                    st.markdown(m["content"])
+            elif m["type"] == "error":
+                st.error(m["content"])
+            elif m["type"] in ("notify", "status"):
+                st.info(m["content"])
+            else:  # agent / ask
+                with st.chat_message("assistant"):
+                    st.markdown(m["content"])
 
         # 入力フォーム
         if not (st.session_state.agent_thread and st.session_state.agent_thread.is_alive()):
@@ -153,8 +152,7 @@ def main():
                 if user_query.strip():
                     st.session_state.messages.append({"type": "user", "content": user_query})
                     st.session_state.stop_event.clear()
-                    
-                    # Thread オブジェクトを生成して保持
+
                     th = threading.Thread(
                         target=run_agent,
                         args=(st.session_state.agent, user_query, st.session_state.stop_event),
@@ -167,7 +165,7 @@ def main():
     # -------- ステータスパネル -------- #
     with col2:
         st.subheader("エージェントステータス")
-        if st.session_state.agent_thread and st.session_state.agent_thread is True:
+        if st.session_state.agent_thread and st.session_state.agent_thread.is_alive():
             st.info("🔄 処理中…")
         else:
             st.info("⏸️ アイドル状態")
@@ -180,18 +178,14 @@ def main():
         if kind == "notify":
             st.session_state.messages.append({"type": "notify", "content": text})
         elif kind == "ask":
-            st.session_state.is_asking = True
-            st.session_state.ask_message = text
             st.session_state.messages.append({"type": "agent", "content": f"質問: {text}"})
         elif kind == "status":
             st.session_state.messages.append({"type": "status", "content": text})
         elif kind == "error":
             st.session_state.messages.append({"type": "error", "content": text})
 
-    # 変化があった場合のみ再描画
     if processed:
         st.rerun()
-
 
 if __name__ == "__main__":
     main()
