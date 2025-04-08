@@ -35,6 +35,7 @@ class AzureOpenAIClient:
             api_key=api_key,
             azure_endpoint=endpoint,
             api_version=api_version,
+            max_retries=0
         )
         self._deployment = deployment_name
         logger.info("Azure OpenAI クライアント初期化完了")
