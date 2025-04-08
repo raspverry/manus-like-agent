@@ -103,7 +103,7 @@ def run_agent(agent: Agent, task_input: str, stop_event: threading.Event):
         msg_queue.put(("status", "タスクが完了しました"))
     except Exception as exc:
         error_message = f"エラー発生: {str(exc)}"
-        logger.error("Agent 実行エラー", exc_info=True)
+        logger.error("Agent 実行エラー", exc_info=False)
         msg_queue.put(("error", error_message))
         msg_queue.put(("status", "エラーにより停止しました"))
     finally:
@@ -313,8 +313,48 @@ def create_ui():
         font-style: italic;
     }
     """
+
+    js_code = """
+        function() {
+            function autoRefresh() {
+                // Find the refresh button by its text content
+                const buttons = document.querySelectorAll('button');
+                let refreshBtn = null;
+                
+                for (const btn of buttons) {
+                    if (btn.textContent.includes('更新')) {
+                        refreshBtn = btn;
+                        break;
+                    }
+                }
+                
+                // Find status element by its content
+                const elements = document.querySelectorAll('h3');
+                let isProcessing = false;
+                
+                for (const el of elements) {
+                    if (el.textContent.includes('処理中')) {
+                        isProcessing = true;
+                        break;
+                    }
+                }
+                
+                // Click refresh if processing
+                if (refreshBtn && isProcessing) {
+                    refreshBtn.click();
+                    console.log('Auto-refreshed');
+                }
+                
+                // Continue checking
+                setTimeout(autoRefresh, 500);
+            }
+            
+            // Start the auto-refresh loop
+            setTimeout(autoRefresh, 1000);
+        }
+    """
     
-    with gr.Blocks(css=css) as demo:
+    with gr.Blocks(css=css, js=js_code) as demo:
         # 状態管理
         agent_state = gr.State({})
         
@@ -346,11 +386,11 @@ def create_ui():
                     stop_btn = gr.Button("処理を停止", variant="stop")
                     clear_btn = gr.Button("履歴をクリア")
                     # 更新ボタンを追加
-                    refresh_btn = gr.Button("更新", variant="secondary")
+                    refresh_btn = gr.Button("更新", variant="secondary", elem_id="refresh_btn")
             
             with gr.Column(scale=1):
                 # ステータス表示
-                status_display = gr.HTML("<h3 style='color: green;'>✅ アイドル状態</h3>", label="エージェントステータス")
+                status_display = gr.HTML("<h3 style='color: green;'>✅ アイドル状態</h3>", label="エージェントステータス", elem_id="status_display")
                 
                 # システム情報
                 gr.Markdown("## システム情報")
@@ -368,7 +408,7 @@ def create_ui():
         submit_btn.click(
             submit_task,
             inputs=[task_input, chat_history, status_display, agent_state],
-            outputs=[task_input, chat_history, status_display, agent_state]
+            outputs=[task_input, chat_history, status_display, agent_state],
         )
         task_input.submit(
             submit_task,
@@ -391,25 +431,4 @@ def create_ui():
             outputs=[chat_history, status_display, agent_state]
         )
         
-        # 自動更新のためのJavaScriptを追加
-        js_code = """
-        <script>
-        // 0.5秒ごとに更新ボタンをクリック
-        setInterval(function() {
-            try {
-                var buttons = document.querySelectorAll('button');
-                for (var i = 0; i < buttons.length; i++) {
-                    if (buttons[i].textContent.includes('更新')) {
-                        buttons[i].click();
-                        break;
-                    }
-                }
-            } catch(e) {
-                console.error("自動更新エラー:", e);
-            }
-        }, 500);
-        </script>
-        """
-        gr.HTML(js_code)
-    
     return demo
