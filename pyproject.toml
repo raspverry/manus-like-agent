@@ -19,8 +19,8 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "requests>=2.31.0",
     "rich>=13.5.0",
-    "streamlit>=1.44.1",
     "structlog>=25.2.0",
     "tenacity>=8.2.2",
     "azure-identity>=1.21.0",
+    "chainlit>=2.5.5",
 ]
