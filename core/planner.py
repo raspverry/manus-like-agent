@@ -67,26 +67,35 @@ class Planner:
                 temperature=0.2,  # プランニングは低温度が適切
                 max_tokens=1500
             )
-            
-            # JSONを抽出 (```json から ``` の間のテキスト)
-            import re
-            json_match = re.search(r"```json\s*([\s\S]*?)\s*```", response_text)
-            
-            if json_match:
-                json_str = json_match.group(1)
-                try:
-                    plan_data = json.loads(json_str)
-                    # 計画を人間可読なテキスト形式に変換
-                    return self._format_plan_to_text(plan_data)
-                except json.JSONDecodeError:
-                    logger.error("計画JSONの解析に失敗しました")
-                    # フォールバック: 生のテキストを返す
-                    return self._generate_fallback_plan(response_text, task_description)
-            else:
-                logger.warning("LLMの応答からJSONプランを抽出できませんでした")
+            try:
+                # plan_data = json.loads(response_text)
+                # 計画を人間可読なテキスト形式に変換
+                return self._format_plan_to_text(response_text)
+            except json.JSONDecodeError:
+                logger.error("計画JSONの解析に失敗しました")
+                # フォールバック: 生のテキストを返す
                 return self._generate_fallback_plan(response_text, task_description)
+            # JSONを抽出 (```json から ``` の間のテキスト)
+            # import re
+            # json_match = re.search(r"```json\s*([\s\S]*?)\s*```", response_text)
+            
+            # if json_match:
+                # json_str = json_match.group(1)
+            #     try:
+            #         plan_data = json.loads(json_str)
+            #         # 計画を人間可読なテキスト形式に変換
+            #         return self._format_plan_to_text(plan_data)
+            #     except json.JSONDecodeError:
+            #         logger.error("計画JSONの解析に失敗しました")
+            #         # フォールバック: 生のテキストを返す
+            #         return self._generate_fallback_plan(response_text, task_description)
+            # else:
+            #     logger.warning("LLMの応答からJSONプランを抽出できませんでした")
+            #     return self._generate_fallback_plan(response_text, task_description)
                 
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             logger.error(f"プラン生成中にエラー: {str(e)}")
             # フォールバック: シンプルな計画を手動で生成
             return self._generate_fallback_plan(None, task_description)
