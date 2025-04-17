@@ -14,7 +14,7 @@ from tools.tool_registry import tool
     parameters={
         "type": "object",
         "properties": {
-            "text": {"type": "string"},
+            "message": {"type": "string"},
             "attachments": {
                 "anyOf": [
                     {"type": "string"},
@@ -22,12 +22,12 @@ from tools.tool_registry import tool
                 ]
             }
         },
-        "required": ["text"]
+        "required": ["message"]
     }
 )
-def message_notify_user(text: str, attachments: Union[str, List[str], None] = None):
-    logger.info(f"ユーザーへの通知: {text}")
-    print(f"\n[通知] {text}")
+def message_notify_user(message: str, attachments: Union[str, List[str], None] = None):
+    logger.info(f"ユーザーへの通知: {message}")
+    print(f"\n[通知] {message}")
     if attachments:
         print(f"[添付] {attachments}")
     return "メッセージを送信しました"
@@ -38,7 +38,7 @@ def message_notify_user(text: str, attachments: Union[str, List[str], None] = No
     parameters={
         "type": "object",
         "properties": {
-            "text": {"type": "string"},
+            "message": {"type": "string"},
             "attachments": {
                 "anyOf": [
                     {"type": "string"},
@@ -50,12 +50,12 @@ def message_notify_user(text: str, attachments: Union[str, List[str], None] = No
                 "enum": ["none", "browser"]
             }
         },
-        "required": ["text"]
+        "required": ["message"]
     }
 )
-def message_ask_user(text: str, attachments: Union[str, List[str], None] = None, suggest_user_takeover: str = "none"):
-    logger.info(f"ユーザーへの質問: {text}")
-    print(f"\n[質問] {text}")
+def message_ask_user(message: str, attachments: Union[str, List[str], None] = None, suggest_user_takeover: str = "none"):
+    logger.info(f"ユーザーへの質問: {message}")
+    print(f"\n[質問] {message}")
     if attachments:
         print(f"[添付] {attachments}")
     if suggest_user_takeover != "none":
