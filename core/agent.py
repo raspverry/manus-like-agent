@@ -111,7 +111,7 @@ class Agent:
         self._iterations = 0
 
         self.context.add_event({"type": "Message", "content": user_input})
-        await self._safe_tool("message_notify_user", {"text": "リクエストを受け付けました。計画を立案します。"})
+        await self._safe_tool("message_notify_user", {"message": "リクエストを受け付けました。計画を立案します。"})
 
         plan_text: str = await _to_thread(self.planner.create_plan, user_input)
         self.context.add_event({"type": "Plan", "content": plan_text})
