@@ -296,16 +296,17 @@ class Agent:
         )
         return content
 
-    def _extract_tool_call(self, text: str) -> Optional[Dict[str, Any]]:
-        fence = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
-        raw = fence.group(1) if fence else None
-        if not raw:
-            brace = re.search(r"(\{.*\})", text, re.DOTALL)
-            raw = brace.group(1) if brace else None
-        if not raw:
-            return None
+    def _extract_tool_call(self, text: Dict) -> Optional[Dict[str, Any]]:
+        # fence = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
+        # # raw = fence.group(1) if fence else None
+        # if not raw:
+        #     brace = re.search(r"(\{.*\})", text, re.DOTALL)
+        #     raw = brace.group(1) if brace else None
+        # if not raw:
+        #     return None
         try:
-            data = json.loads(raw)
+            # data = json.loads(raw)
+            data = text
             return data if "name" in data else None
         except Exception:
             return None
