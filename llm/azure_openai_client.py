@@ -9,13 +9,14 @@ Azure OpenAI クライアント（最新版・JSON モード対応）
 """
 
 from __future__ import annotations
-
+import re
+import json
 from core.logging_config import logger
 import os
 from typing import Any, Dict, List, Tuple
 
-from openai import AzureOpenAI
-
+from langchain_openai import AzureChatOpenAI
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 
 
 
@@ -23,18 +24,24 @@ class AzureOpenAIClient:
     """Azure OpenAI Service ラッパー。"""
 
     def __init__(self) -> None:
+        TOKEN_PROVIDER = get_bearer_token_provider(
+            DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default"
+        )
         api_key = os.getenv("AZURE_OPENAI_API_KEY")
         endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
-        api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2023-12-01-preview")
+        api_version = os.getenv("AZURE_OPENAI_API_VERSION")
         deployment_name = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
-
+        
+        model_name="gpt-4o"
         if not all([api_key, endpoint, deployment_name]):
             raise EnvironmentError("Azure OpenAI の環境変数が不足しています。")
 
-        self._client = AzureOpenAI(
-            api_key=api_key,
+        self._client = AzureChatOpenAI(
+            # api_key=api_key,
+            azure_ad_token_provider=TOKEN_PROVIDER,
             azure_endpoint=endpoint,
             api_version=api_version,
+            azure_deployment=model_name,
             max_retries=0
         )
         self._deployment = deployment_name
@@ -57,8 +64,8 @@ class AzureOpenAIClient:
             usage:   {prompt_tokens, completion_tokens, total_tokens}
         """
         params: Dict[str, Any] = {
-            "model": self._deployment,
-            "messages": messages,
+            # "model": self._deployment,
+            # "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
@@ -66,10 +73,33 @@ class AzureOpenAIClient:
             params["response_format"] = {"type": "json_object"}
 
         try:
-            resp = self._client.chat.completions.create(**params)
-            content = resp.choices[0].message.content or ""
-            usage = resp.usage.model_dump() if resp.usage else {}
-            return content, usage
+            resp = self._client.invoke(messages,**params)
+            
+            # content = resp.choices[0].message.content or ""
+            content = resp.content
+            json_pattern = r'```json\s*(.*?)\s*```'
+            
+            match = re.search(json_pattern, content, re.DOTALL)
+        
+            if match:
+                json_text = match.group(1).strip()
+            else:
+                # JSONブロックがない場合は、{で始まり}で終わる部分を探す
+                json_pattern = r'(\{.*\})'
+                match = re.search(json_pattern, content, re.DOTALL)
+                if match:
+                    json_text = match.group(1).strip()
+                else:
+                    raise ValueError("JSONデータが見つかりません")
+            result = json.loads(json_text)
+            # Get usage from response_metadata
+            usage = {}
+            if hasattr(resp, 'response_metadata') and resp.response_metadata:
+                if 'token_usage' in resp.response_metadata:
+                    usage = resp.response_metadata['token_usage']
+                elif 'usage_metadata' in resp.response_metadata:
+                    usage = resp.response_metadata['usage_metadata']
+            return result, usage
         except Exception as exc:
             logger.error(f"Azure OpenAI 呼び出し失敗: {exc}")
             raise
