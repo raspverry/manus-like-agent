@@ -58,12 +58,12 @@ def create_agent() -> Agent:
     # UI に転送するメッセージツール
     registry.register_tool(
         "message_notify_user",
-        lambda text, attachments=None: msg_queue.put(("notify", text)),
+        lambda message, attachments=None: msg_queue.put(("notify", message)),
         registry.get_tool_spec("message_notify_user"),
     )
     registry.register_tool(
         "message_ask_user",
-        lambda text, attachments=None, suggest_user_takeover="none": msg_queue.put(("ask", text)),
+        lambda message, attachments=None, suggest_user_takeover="none": msg_queue.put(("ask", message)),
         registry.get_tool_spec("message_ask_user"),
     )
 
