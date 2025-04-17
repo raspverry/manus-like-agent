@@ -35,7 +35,7 @@ class AzureOpenAIClient:
         model_name="gpt-4o"
         if not all([api_key, endpoint, deployment_name]):
             raise EnvironmentError("Azure OpenAI の環境変数が不足しています。")
-
+        
         self._client = AzureChatOpenAI(
             # api_key=api_key,
             azure_ad_token_provider=TOKEN_PROVIDER,
@@ -90,6 +90,7 @@ class AzureOpenAIClient:
                 if match:
                     json_text = match.group(1).strip()
                 else:
+                    print(content)
                     raise ValueError("JSONデータが見つかりません")
             result = json.loads(json_text)
             # Get usage from response_metadata
