@@ -12,6 +12,7 @@ Manus ライクなエージェントの中心クラス。UI をブロックし�
 * stop() で _cancel_event をセットし、ループ内 await ポイントで即時キャンセル。
 * タスクごとの進捗やコンテキスト要約など旧版のロジックは保持。
 * Plan ↔ todo.md 同期対応
+* 会話フロー改善：ユーザー応答後の適切な会話遷移を実現
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 from config import CONFIG
 from tools.tool_registry import ToolRegistry
@@ -33,8 +34,6 @@ from .context import Context
 from .enhanced_memory import EnhancedMemory
 from .memory import Memory
 from .planner import Planner
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +90,10 @@ class Agent:
         # Plan ↔ todo 同期用
         self._plan_hash: str = ""
         self._todo_path = Path(CONFIG["system"]["workspace_dir"]) / CONFIG["memory"]["todo_file"]
+        
+        # 会話状態管理用
+        self._last_tool_call: Optional[Dict[str, Any]] = None
+        self._recent_notifications: List[str] = []  # 最近の通知メッセージを追跡
 
     # ------------------------------------------------------------------ #
     # 公開 API
@@ -109,6 +112,7 @@ class Agent:
         self._cancel_event = asyncio.Event()
         self._start_time = time.time()
         self._iterations = 0
+        self._recent_notifications = []
 
         self.context.add_event({"type": "Message", "content": user_input})
         await self._safe_tool("message_notify_user", {"message": "リクエストを受け付けました。計画を立案します。"})
@@ -130,7 +134,7 @@ class Agent:
 
         while not self._cancel_event.is_set() and self._iterations < max_iter:
             if time.time() - self._start_time > max_seconds:
-                await self._safe_tool("message_notify_user", {"text": "時間上限を超過したため終了します。"})
+                await self._safe_tool("message_notify_user", {"message": "時間上限を超過したため終了します。"})
                 break
 
             self._iterations += 1
@@ -142,6 +146,7 @@ class Agent:
             if summarize_every and self._iterations % summarize_every == 0:
                 await _to_thread(self._summarize_context)
 
+            # プロンプト生成とLLM呼び出し
             prompt = await _to_thread(self._build_prompt)
             llm_resp = await _to_thread(self._get_llm_response, prompt)
             tool_call = await _to_thread(self._extract_tool_call, llm_resp)
@@ -151,8 +156,18 @@ class Agent:
                 continue
 
             if tool_call["name"] == "idle":
-                await self._safe_tool("message_notify_user", {"text": "タスクが完了しました。"})
+                await self._safe_tool("message_notify_user", {"message": "タスクが完了しました。"})
                 break
+
+            # ツール実行を記録
+            self._last_tool_call = tool_call
+            self.context.add_event({"type": "Action", "content": tool_call})
+
+            # message_notify_userの繰り返しを検出
+            if tool_call["name"] == "message_notify_user" and self._is_repetitive_notification(tool_call):
+                logger.warning("繰り返しの通知メッセージを検出しました。次の質問に進むようにガイダンスを追加します。")
+                # 次回のループで質問を促すガイダンスが追加される
+                continue
 
             try:
                 result = await asyncio.wait_for(
@@ -164,13 +179,71 @@ class Agent:
             except Exception as exc:
                 result = f"ツール実行エラー: {exc}"
 
-            self.context.add_event({"type": "Observation", "tool": tool_call["name"], "content": result})
+            # ツールに応じた特別な処理
+            if tool_call["name"] == "message_ask_user":
+                # ユーザーの応答をMessageイベントとして追加
+                self.context.add_event({"type": "Message", "content": result})
+                # 通常の観察結果としても追加（一貫性のため）
+                self.context.add_event({"type": "Observation", "tool": tool_call["name"], "content": f"ユーザーの回答: {result}"})
+                # 通知メッセージ履歴をクリア（状態が変わったため）
+                self._recent_notifications.clear()
+            elif tool_call["name"] == "message_notify_user":
+                # 通知メッセージを記録
+                if "message" in tool_call.get("parameters", {}):
+                    self._recent_notifications.append(tool_call["parameters"]["message"])
+                    # 最大5件まで記録
+                    if len(self._recent_notifications) > 5:
+                        self._recent_notifications.pop(0)
+                # 通常の観察結果を追加
+                self.context.add_event({"type": "Observation", "tool": tool_call["name"], "content": result})
+            else:
+                # その他のツールの観察結果を追加
+                self.context.add_event({"type": "Observation", "tool": tool_call["name"], "content": result})
+
             await _to_thread(self.memory.update_from_observation, tool_call, result)
 
         if self._cancel_event.is_set():
-            await self._safe_tool("message_notify_user", {"text": "ユーザーにより停止しました。"})
+            await self._safe_tool("message_notify_user", {"message": "ユーザーにより停止しました。"})
         else:
             await _to_thread(self._report_progress, True)
+
+    def _is_repetitive_notification(self, tool_call: Dict[str, Any]) -> bool:
+        """
+        繰り返しの通知メッセージかどうかを判定します。
+        
+        Args:
+            tool_call: ツール呼び出し情報
+            
+        Returns:
+            繰り返しメッセージと判断された場合はTrue
+        """
+        if tool_call["name"] != "message_notify_user" or not self._recent_notifications:
+            return False
+            
+        # パラメータからメッセージを取得
+        params = tool_call.get("parameters", {})
+        if "message" not in params:
+            return False
+            
+        message = params["message"]
+        
+        # 最近のメッセージとの類似度を計算
+        for recent in self._recent_notifications[-3:]:  # 最新3件をチェック
+            # 簡易的な類似度: 文字が70%以上一致した場合は類似と判断
+            longer = max(len(message), len(recent))
+            if longer == 0:  # ゼロ除算防止
+                continue
+                
+            # Levenshtein距離の簡易実装
+            distance = sum(c1 != c2 for c1, c2 in zip(message, recent))
+            distance += abs(len(message) - len(recent))  # 長さの差を追加
+            similarity = 1.0 - (distance / longer)
+            
+            if similarity > 0.7:  # 70%以上一致した場合
+                logger.info(f"メッセージの類似度: {similarity:.2f} - 繰り返しと判断")
+                return True
+                
+        return False
 
     # ------------------------------------------------------------------ #
     # Plan ↔ todo 同期ロジック
@@ -261,23 +334,61 @@ class Agent:
         m, s = divmod(int(elapsed), 60)
         prefix = "最終レポート" if is_final else "途中経過"
         msg = f"{prefix} – 経過時間: {m}分{s}秒, イテレーション: {self._iterations} 回"
-        self.tool_registry.execute_tool("message_notify_user", {"text": msg})
+        self.tool_registry.execute_tool("message_notify_user", {"message": msg})
 
     def _build_prompt(self) -> str:
+        """
+        コンテキストとメモリ状態に基づいてプロンプトを構築します。
+        会話の流れを改善するためのガイダンスも追加します。
+        """
         events_text = ""
-        for ev in self.context.get_events():
+        last_user_message = None
+        last_action_type = None
+        user_responses_count = 0
+        notify_after_user_message = False
+        
+        # イベントの分析
+        for i, ev in enumerate(self.context.get_events()):
             if ev["type"] == "Message":
                 events_text += f"ユーザー: {ev['content']}\n"
+                last_user_message = ev['content']
+                user_responses_count += 1
+                
+                # ユーザーメッセージの後に通知が来たかチェック
+                if i + 1 < len(self.context.get_events()) and \
+                   self.context.get_events()[i + 1]["type"] == "Action" and \
+                   self.context.get_events()[i + 1].get("content", {}).get("name") == "message_notify_user":
+                    notify_after_user_message = True
+                
             elif ev["type"] == "Plan":
                 events_text += f"計画:\n{ev['content']}\n"
             elif ev["type"] == "Action":
                 events_text += f"アクション呼び出し: {json.dumps(ev['content'], ensure_ascii=False)}\n"
+                content = ev.get("content", {})
+                if isinstance(content, dict) and "name" in content:
+                    last_action_type = content["name"]
             elif ev["type"] == "Observation":
                 events_text += f"観察: {str(ev.get('content', ''))}\n"
             elif ev["type"] == "Summary":
                 events_text += f"要約: {ev['content']}\n"
+        
+        # 会話フローのガイダンスを追加
+        if user_responses_count > 1 and last_action_type == "message_notify_user" and \
+           len(self._recent_notifications) >= 2:
+            events_text += "\n<会話フローガイダンス>\n"
+            events_text += "ユーザーはすでに質問に回答しており、通知で確認済みです。\n"
+            events_text += "次のステップに進み、同じ内容の通知を繰り返さず、message_ask_user で次の質問を行ってください。\n"
+            events_text += "</会話フローガイダンス>\n"
+        
+        # 最後のメッセージがユーザーからで、直後にアクションがまだない場合
+        if last_user_message and self.context.get_events()[-1]["type"] == "Message":
+            events_text += "\n<会話状態>\n"
+            events_text += "ユーザーが質問に回答したところです。この回答を確認した後、message_ask_user で次の質問に進んでください。\n"
+            events_text += "</会話状態>\n"
+        
         memory_state = self.memory.get_relevant_state()
         tools = ", ".join(self.tool_registry.get_tool_names())
+        
         return (
             f"{self.system_prompt}\n\n"
             f"==== イベントストリーム ====\n{events_text}\n\n"
@@ -285,6 +396,11 @@ class Agent:
             f"利用可能なツール: {tools}\n"
             "次のアクションとして必ず 1 つだけツールを JSON 形式で呼び出してください。\n"
             "フォーマット:\n```json\n{\"name\": <tool_name>, \"parameters\": {...}}\n```\n"
+            "\n<会話ガイドライン>\n"
+            "* ユーザーの回答を受け取った後は、回答の確認は一度だけにしてください\n"
+            "* 同じような通知メッセージを繰り返し送らないでください\n"
+            "* 次のステップに関する質問は message_ask_user で行ってください\n"
+            "</会話ガイドライン>\n"
         )
 
     def _get_llm_response(self, prompt: str) -> str:
@@ -297,15 +413,7 @@ class Agent:
         return content
 
     def _extract_tool_call(self, text: Dict) -> Optional[Dict[str, Any]]:
-        # fence = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
-        # # raw = fence.group(1) if fence else None
-        # if not raw:
-        #     brace = re.search(r"(\{.*\})", text, re.DOTALL)
-        #     raw = brace.group(1) if brace else None
-        # if not raw:
-        #     return None
         try:
-            # data = json.loads(raw)
             data = text
             return data if "name" in data else None
         except Exception:
