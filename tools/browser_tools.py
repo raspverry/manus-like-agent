@@ -847,28 +847,30 @@ async def _run_javascript_async(code: str):
     parameters={
         "type": "object",
         "properties": {
-            "url": {"type": "string", "description": "PDFファイルのURL"}
+            "url": {"type": "string", "description": "PDFファイルのURL"},
+            "pages": {"type": "string", "description": "抽出するページ範囲（例：1-5,10,15-20）。空の場合は全ページ"}
         },
         "required": ["url"]
     }
 )
-def browser_extract_pdf(url: str):
+def browser_extract_pdf(url: str, pages: str = ""):
     """
     PDF文書からテキストを抽出します。
     
     Args:
         url: PDFファイルのURL
+        pages: 抽出するページ範囲（例：1-5,10,15-20）。空の場合は全ページ
         
     Returns:
         抽出されたテキストを含む文字列
     """
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    res = loop.run_until_complete(_extract_pdf_async(url))
+    res = loop.run_until_complete(_extract_pdf_async(url, pages))
     loop.close()
     return res
 
-async def _extract_pdf_async(url: str):
+async def _extract_pdf_async(url: str, pages: str = ""):
     """非同期でPDFテキスト抽出"""
     if not url.lower().endswith('.pdf'):
         return "PDFファイルのURLではありません。.pdfで終わるURLを提供してください。"
@@ -891,23 +893,122 @@ async def _extract_pdf_async(url: str):
             temp_file_path = temp_file.name
             temp_file.write(pdf_content)
         
+        # ページ範囲を解析
+        page_ranges = []
+        if pages:
+            for part in pages.split(','):
+                if '-' in part:
+                    start, end = map(int, part.split('-'))
+                    page_ranges.extend(range(start, end + 1))
+                else:
+                    page_ranges.append(int(part))
+        
         # PyPDF2でテキスト抽出
         text_content = ""
+        page_count = 0
+        
         with open(temp_file_path, 'rb') as f:
             pdf_reader = PyPDF2.PdfReader(f)
             num_pages = len(pdf_reader.pages)
             
-            for page_num in range(num_pages):
-                page = pdf_reader.pages[page_num]
-                text_content += page.extract_text() + "\n\n"
+            if not page_ranges:  # 全ページ抽出
+                page_ranges = range(1, num_pages + 1)
+            
+            for page_num in page_ranges:
+                if page_num < 1 or page_num > num_pages:
+                    continue
+                
+                # PyPDF2はゼロベースのインデックス
+                page = pdf_reader.pages[page_num - 1]
+                extracted_text = page.extract_text()
+                
+                if extracted_text:
+                    page_count += 1
+                    text_content += f"// ページ {page_num}\n{extracted_text}\n\n"
         
         # 一時ファイルを削除
         os.unlink(temp_file_path)
         
+        # より高度な抽出を試みる
+        if not text_content.strip() or page_count == 0:
+            # PyMuPDFを試す
+            try:
+                import fitz  # PyMuPDF
+                
+                # 一時ファイルに再度保存
+                with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as temp_file:
+                    temp_file_path = temp_file.name
+                    temp_file.write(pdf_content)
+                
+                text_content = ""
+                page_count = 0
+                
+                with fitz.open(temp_file_path) as doc:
+                    num_pages = len(doc)
+                    
+                    if not page_ranges:  # 全ページ抽出
+                        page_ranges = range(1, num_pages + 1)
+                    
+                    for page_num in page_ranges:
+                        if page_num < 1 or page_num > num_pages:
+                            continue
+                        
+                        # PyMuPDFはゼロベースのインデックス
+                        page = doc[page_num - 1]
+                        extracted_text = page.get_text()
+                        
+                        if extracted_text:
+                            page_count += 1
+                            text_content += f"// ページ {page_num}\n{extracted_text}\n\n"
+                
+                # 一時ファイルを削除
+                os.unlink(temp_file_path)
+            except ImportError:
+                # PyMuPDFがインストールされていない
+                pass
+        
+        # それでも失敗した場合、OCRを試みる
+        if not text_content.strip() or page_count == 0:
+            try:
+                import pytesseract
+                from PIL import Image
+                import pdf2image
+                
+                # 一時ファイルに再度保存
+                with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as temp_file:
+                    temp_file_path = temp_file.name
+                    temp_file.write(pdf_content)
+                
+                text_content = ""
+                page_count = 0
+                
+                # PDFを画像に変換して、OCRでテキスト抽出
+                images = pdf2image.convert_from_path(temp_file_path)
+                
+                for i, image in enumerate(images):
+                    page_num = i + 1
+                    if page_ranges and page_num not in page_ranges:
+                        continue
+                    
+                    extracted_text = pytesseract.image_to_string(image, lang='jpn+eng')
+                    if extracted_text:
+                        page_count += 1
+                        text_content += f"// ページ {page_num}\n{extracted_text}\n\n"
+                
+                # 一時ファイルを削除
+                os.unlink(temp_file_path)
+            except ImportError:
+                # PDF2Image or Tesseractがインストールされていない
+                pass
+        
+        # 結果をフォーマット
+        if not text_content.strip() or page_count == 0:
+            return f"PDFからテキストを抽出できませんでした。このPDFはスキャン画像のみで、テキストレイヤーを持っていない可能性があります。OCRを試すには、pytesserartとpdf2imageをインストールしてください。"
+        
         # 結果をフォーマット
         result = f"## PDFから抽出されたテキスト\n"
         result += f"ソース: {url}\n"
-        result += f"ページ数: {num_pages}ページ\n\n"
+        result += f"抽出ページ数: {page_count}ページ\n\n"
         result += "### 内容\n\n"
         result += text_content
         
